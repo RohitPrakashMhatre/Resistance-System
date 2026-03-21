@@ -1,0 +1,38 @@
+backend/
+│
+├── app/                 # Pure application code
+│   ├── api/
+│   ├── core/
+│   ├── engine/
+│   ├── strategies/
+│   ├── services/
+│   └── models/
+│
+├── scripts/             # One-off / cron jobs
+│   ├── ingest_data.py
+│   └── daily_cron.py
+│
+├── data/                # ALL data lives here (important)
+│   ├── duckdb/
+│   │   └── market.duckdb
+│   │
+│   ├── market/          # Raw & cleaned market data
+│   │   ├── ohlcv.parquet
+│   │   └── symbol_meta.parquet
+│   │
+│   ├── results/         # Backtest outputs
+│   │   ├── strategy_results.parquet
+│   │   ├── trades.parquet
+│   │   └── equity_curve.parquet
+│   │
+│   ├── cache/           # Optional (if Redis not used)
+│   │   └── last_run.pkl
+│   │
+│   └── logs/
+│       └── backtest.log
+│
+├── tests/
+│
+├── .env
+├── main.py
+└── README.md

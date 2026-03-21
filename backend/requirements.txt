@@ -1,0 +1,10 @@
+yfinance
+numpy
+pandas
+matplotlib
+seaborn
+duckdb
+cachetools
+fastapi
+uvicorn
+pydantic
