@@ -1,5 +1,52 @@
 import { useEffect, useRef, useState } from "react";
-import { createChart, CandlestickSeries } from "lightweight-charts";
+import { createChart, CandlestickSeries, createSeriesMarkers } from "lightweight-charts";
+
+/** Native chart markers: green up arrow (buy), red down arrow (sell) */
+function buildTradeSeriesMarkers(markers) {
+  const buyColor = "#22c55e";
+  const sellColor = "#ef4444";
+  const out = [];
+  (markers?.buy_dates || []).forEach((time) => {
+    out.push({
+      time,
+      position: "belowBar",
+      color: buyColor,
+      shape: "arrowUp",
+      size: 1.35,
+    });
+  });
+  (markers?.sell_dates || []).forEach((time) => {
+    out.push({
+      time,
+      position: "aboveBar",
+      color: sellColor,
+      shape: "arrowDown",
+      size: 1.35,
+    });
+  });
+  return out.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+}
+
+/** @param {"signals" | "trades"} markerVariant */
+function buildMarkerDateList(markerVariant, markers) {
+  const dateList = [];
+  if (markerVariant === "trades") {
+    (markers?.buy_dates || []).forEach((date) => dateList.push({ date, type: "buy" }));
+    (markers?.sell_dates || []).forEach((date) => dateList.push({ date, type: "sell" }));
+  } else {
+    (markers?.high_dates || []).forEach((date) => dateList.push({ date, type: "high" }));
+    (markers?.low_dates || []).forEach((date) => dateList.push({ date, type: "low" }));
+  }
+  return dateList;
+}
+
+function lineColorForMarker(type, markerVariant, isFocused) {
+  if (isFocused) return "#0066ff";
+  if (markerVariant === "trades") {
+    return type === "buy" ? "#22c55e" : "#f97316";
+  }
+  return type === "high" ? "#ff6b6b" : "#51cf66";
+}
 
 function getChartOptions(theme) {
   if (theme === "dark") {
@@ -39,10 +86,17 @@ function getChartOptions(theme) {
   };
 }
 
-export default function TradingChart({ prices, markers, focusDate, theme = "light" }) {
+export default function TradingChart({
+  prices,
+  markers,
+  focusDate,
+  theme = "light",
+  markerVariant = "signals",
+}) {
   const chartContainerRef = useRef(null);
   const chartRef = useRef(null);
   const candleSeriesRef = useRef(null);
+  const seriesMarkersPluginRef = useRef(null);
   const formattedRef = useRef([]);
   const overlayRef = useRef(null);
   const [supported, setSupported] = useState(true);
@@ -97,6 +151,14 @@ export default function TradingChart({ prices, markers, focusDate, theme = "ligh
         chartRef.current = localChart;
         candleSeriesRef.current = localSeries;
 
+        try {
+          if (typeof createSeriesMarkers === "function") {
+            seriesMarkersPluginRef.current = createSeriesMarkers(localSeries, []);
+          }
+        } catch (e) {
+          console.warn("createSeriesMarkers failed", e);
+        }
+
         window.addEventListener("resize", handleResize);
       } catch (err) {
         console.warn("Chart initialization failed:", err);
@@ -122,6 +184,7 @@ export default function TradingChart({ prices, markers, focusDate, theme = "ligh
         chartRef.current = null;
       }
       candleSeriesRef.current = null;
+      seriesMarkersPluginRef.current = null;
     };
   }, []);
 
@@ -150,6 +213,31 @@ export default function TradingChart({ prices, markers, focusDate, theme = "ligh
       series.setData(formattedData);
     }
 
+    // Trade mode: arrow markers via lightweight-charts plugin (no vertical lines)
+    if (markerVariant === "trades") {
+      try {
+        if (seriesMarkersPluginRef.current?.setMarkers) {
+          seriesMarkersPluginRef.current.setMarkers(buildTradeSeriesMarkers(markers));
+        }
+      } catch (e) {
+        console.warn("setMarkers failed", e);
+      }
+      if (overlayRef.current) {
+        overlayRef.current.innerHTML = "";
+      }
+      if (chartRef.current) {
+        chartRef.current.timeScale().fitContent();
+      }
+      return;
+    }
+
+    // Signals mode: clear native series markers
+    try {
+      if (seriesMarkersPluginRef.current?.setMarkers) {
+        seriesMarkersPluginRef.current.setMarkers([]);
+      }
+    } catch (e) {}
+
     // create DOM overlay for vertical line markers (since line series don't support markers API)
     if (!overlayRef.current) {
       const overlay = document.createElement("div");
@@ -166,10 +254,7 @@ export default function TradingChart({ prices, markers, focusDate, theme = "ligh
       overlayRef.current = overlay;
     }
 
-    // build list of dates to mark
-    const dateList = [];
-    (markers?.high_dates || []).forEach((date) => dateList.push({ date, type: "high" }));
-    (markers?.low_dates || []).forEach((date) => dateList.push({ date, type: "low" }));
+    const dateList = buildMarkerDateList(markerVariant, markers);
 
     // function to update overlay lines based on visible range and focusDate
     const redrawOverlay = () => {
@@ -203,15 +288,8 @@ export default function TradingChart({ prices, markers, focusDate, theme = "ligh
           line.style.height = "100%";
           
           const isFocused = focusDate === date;
-          
-          // Use background-color instead of borderLeft for reliable rendering
-          if (isFocused) {
-            line.style.backgroundColor = "#0066ff";
-            line.style.opacity = "1";
-          } else {
-            line.style.backgroundColor = type === "high" ? "#ff6b6b" : "#51cf66";
-            line.style.opacity = "0.6";
-          }
+          line.style.backgroundColor = lineColorForMarker(type, markerVariant, isFocused);
+          line.style.opacity = isFocused ? "1" : "0.65";
           
           line.title = `${type}: ${date}`;
           overlayRef.current.appendChild(line);
@@ -237,16 +315,15 @@ export default function TradingChart({ prices, markers, focusDate, theme = "ligh
         try { unsubscribe(); } catch (e) {}
       }
     };
-  }, [prices, markers, supported]);
+  }, [prices, markers, supported, markerVariant]);
 
   // redraw overlay when focusDate changes (to highlight the focused line)
   useEffect(() => {
+    if (markerVariant === "trades") return;
     if (!overlayRef.current || !chartRef.current) return;
     
     const timeScale = chartRef.current.timeScale();
-    const dateList = [];
-    (markers?.high_dates || []).forEach((date) => dateList.push({ date, type: "high" }));
-    (markers?.low_dates || []).forEach((date) => dateList.push({ date, type: "low" }));
+    const dateList = buildMarkerDateList(markerVariant, markers);
 
     overlayRef.current.innerHTML = "";
     
@@ -277,23 +354,19 @@ export default function TradingChart({ prices, markers, focusDate, theme = "ligh
         line.style.height = "100%";
         
         const isFocused = focusDate === date;
-        if (isFocused) {
-          line.style.backgroundColor = "#0066ff";
-          line.style.opacity = "1";
-        } else {
-          line.style.backgroundColor = type === "high" ? "#ff6b6b" : "#51cf66";
-          line.style.opacity = "0.6";
-        }
+        line.style.backgroundColor = lineColorForMarker(type, markerVariant, isFocused);
+        line.style.opacity = isFocused ? "1" : "0.65";
         
         line.title = `${type}: ${date}`;
         overlayRef.current.appendChild(line);
       } catch (e) {}
     });
-  }, [focusDate, markers]);
+  }, [focusDate, markers, markerVariant]);
 
   // focus on selected date when requested (center chart on that date)
   useEffect(() => {
     if (!supported) return;
+    if (markerVariant === "trades") return;
     if (!focusDate || !formattedRef.current?.length || !chartRef.current) {
       return;
     }
@@ -312,9 +385,7 @@ export default function TradingChart({ prices, markers, focusDate, theme = "ligh
         if (!overlayRef.current || !chartRef.current) return;
         
         const timeScale = chartRef.current.timeScale();
-        const dateList = [];
-        (markers?.high_dates || []).forEach((date) => dateList.push({ date, type: "high" }));
-        (markers?.low_dates || []).forEach((date) => dateList.push({ date, type: "low" }));
+        const dateList = buildMarkerDateList(markerVariant, markers);
 
         // Build a map of date -> logical index for coordinate conversion
         const dateToIndexMap = {};
@@ -368,13 +439,8 @@ export default function TradingChart({ prices, markers, focusDate, theme = "ligh
             line.style.height = "100%";
             
             const isFocused = focusDate === date;
-            if (isFocused) {
-              line.style.backgroundColor = "#0066ff";
-              line.style.opacity = "1";
-            } else {
-              line.style.backgroundColor = type === "high" ? "#ff6b6b" : "#51cf66";
-              line.style.opacity = "0.6";
-            }
+            line.style.backgroundColor = lineColorForMarker(type, markerVariant, isFocused);
+            line.style.opacity = isFocused ? "1" : "0.65";
             
             line.title = `${type}: ${date}`;
             overlayRef.current.appendChild(line);
@@ -425,7 +491,7 @@ export default function TradingChart({ prices, markers, focusDate, theme = "ligh
     } catch (err) {
       // Fallback
     }
-  }, [focusDate, supported, markers]);
+  }, [focusDate, supported, markers, markerVariant]);
 
   if (!supported) {
     return (

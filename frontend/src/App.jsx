@@ -5,10 +5,20 @@ import Tabs from "./components/Tabs";
 import { TabContent } from "./components/TabContent";
 
 const createEmptyTabState = () => ({
+  contentView: "overview",
   prices: [],
   markers: { high_dates: [], low_dates: [] },
   loading: false,
   focusDate: null,
+  tradeDetail: {
+    window: "",
+    holdDays: 30,
+    stopLossPct: 0,
+    transactionCostPct: 0.2,
+    loading: false,
+    error: null,
+    detail: null,
+  },
   backtestConfigs: [
     {
       id: "scenario-1",

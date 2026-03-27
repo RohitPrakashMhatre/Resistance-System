@@ -701,3 +701,116 @@ html, body, #root {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* Sub-view: Overview vs Trade detail */
+.subview-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 0 0 4px;
+  flex-wrap: wrap;
+}
+
+.subview-tab {
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #0f172a;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.subview-tab:hover {
+  background: #eef2ff;
+}
+
+.subview-tab.active {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: #fff;
+  border-color: #1d4ed8;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.22);
+}
+
+.trade-detail-controls {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 14px 16px;
+}
+
+.trade-detail-input-grid {
+  margin-bottom: 8px;
+}
+
+.trade-detail-run-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.trade-detail-error {
+  color: #b91c1c;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.trade-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.trade-detail-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.trade-detail-chart-card {
+  margin: 0;
+}
+
+.trade-detail-chart-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: #0f172a;
+}
+
+.trade-detail-table-wrap {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.trade-detail-table-inner {
+  max-height: 360px;
+}
+
+.theme-dark .subview-tab {
+  background: #0f172a;
+  border-color: #334155;
+  color: #e5e7eb;
+}
+
+.theme-dark .subview-tab:hover {
+  background: #1e293b;
+}
+
+.theme-dark .trade-detail-controls,
+.theme-dark .trade-detail-table-wrap {
+  background: #111827;
+  border-color: #334155;
+}
+
+.theme-dark .trade-detail-chart-title {
+  color: #e5e7eb;
+}
+
+.theme-dark .trade-detail-error {
+  color: #fca5a5;
+}

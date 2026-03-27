@@ -1,13 +1,30 @@
 import { useEffect } from "react";
 import TradingChart from "./TradingChart";
+import EquityCurveChart from "./EquityCurveChart";
 
 export function TabContent({ symbol, theme, windowSize, setWindowSize, tabData, setTabData }) {
+	const contentView = tabData?.contentView || "overview";
 	const prices = tabData?.prices || [];
 	const markers = tabData?.markers || { high_dates: [], low_dates: [] };
 	const loading = tabData?.loading || false;
 	const focusDate = tabData?.focusDate || null;
 	const backtestConfigs = tabData?.backtestConfigs || [];
 	const dataRange = tabData?.dataRange || null;
+	// Merge with defaults so partial state (e.g. missing holdDays after hot-reload) never leaves undefined,
+	// which would make Number(undefined) === NaN and show a false "Sell days" error.
+	const rawTd = tabData?.tradeDetail;
+	const tradeDetail = {
+		window: rawTd?.window ?? "",
+		holdDays: rawTd?.holdDays != null && rawTd?.holdDays !== "" ? rawTd.holdDays : 30,
+		stopLossPct: rawTd?.stopLossPct != null && rawTd?.stopLossPct !== "" ? rawTd.stopLossPct : 0,
+		transactionCostPct:
+			rawTd?.transactionCostPct != null && rawTd?.transactionCostPct !== ""
+				? rawTd.transactionCostPct
+				: 0.2,
+		loading: Boolean(rawTd?.loading),
+		error: rawTd?.error ?? null,
+		detail: rawTd?.detail ?? null,
+	};
 
 	const defaultScenario = () => ({
 		id: `scenario-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -175,6 +192,65 @@ export function TabContent({ symbol, theme, windowSize, setWindowSize, tabData, 
 		}
 	};
 
+	const updateTradeDetail = (updater) => {
+		setTabData((prev) => ({
+			...prev,
+			tradeDetail:
+				typeof updater === "function"
+					? updater(prev.tradeDetail || {})
+					: { ...(prev.tradeDetail || {}), ...updater },
+		}));
+	};
+
+	const fetchTradeDetailViz = async () => {
+		const windowParam = Number(tradeDetail.window);
+		const holdDaysParam = Number(tradeDetail.holdDays);
+		const feeParam = Number(tradeDetail.transactionCostPct);
+		const stopParam = Number(tradeDetail.stopLossPct);
+		if (!tradeDetail.window || Number.isNaN(windowParam) || windowParam < 2) {
+			updateTradeDetail({ error: "Enter a window size (≥ 2)." });
+			return;
+		}
+		if (Number.isNaN(holdDaysParam) || holdDaysParam <= 0) {
+			updateTradeDetail({ error: "Sell days must be a positive number." });
+			return;
+		}
+		if (Number.isNaN(feeParam) || feeParam < 0) {
+			updateTradeDetail({ error: "Fee/slippage must be ≥ 0." });
+			return;
+		}
+		if (Number.isNaN(stopParam) || stopParam < 0) {
+			updateTradeDetail({ error: "Stop-loss must be ≥ 0." });
+			return;
+		}
+
+		try {
+			updateTradeDetail({ loading: true, error: null });
+			const qs = new URLSearchParams({
+				symbol,
+				window: String(windowParam),
+				hold_days: String(holdDaysParam),
+				transaction_cost_pct: String(feeParam),
+				stop_loss_pct: String(stopParam),
+			});
+			const response = await fetch(
+				`http://localhost:8000/generate/backtest/trade-detail?${qs.toString()}`
+			);
+			if (!response.ok) {
+				const errText = await response.text();
+				throw new Error(errText || `HTTP ${response.status}`);
+			}
+			const data = await response.json();
+			updateTradeDetail({ loading: false, detail: data, error: null });
+		} catch (err) {
+			console.error(err);
+			updateTradeDetail({
+				loading: false,
+				error: err?.message || "Failed to load trade detail.",
+			});
+		}
+	};
+
 	const removeScenario = async (scenario) => {
 		const confirmed = window.confirm("Delete this scenario from UI and DB cache?");
 		if (!confirmed) return;
@@ -206,19 +282,50 @@ export function TabContent({ symbol, theme, windowSize, setWindowSize, tabData, 
 		});
 	};
 
+	const td = tradeDetail.detail;
+	const tdPrices = td?.prices || [];
+	const tdBuyDates = (td?.trades || []).map((t) => t.buy_date).filter(Boolean);
+	const tdSellDates = (td?.trades || []).map((t) => t.sell_date).filter(Boolean);
+	const tdEquity = td?.equity_curve || [];
+	const tdMetrics = td?.metrics;
+
 	return (
 		<div className="tab-panel">
+			<div className="subview-tabs">
+				<button
+					type="button"
+					className={`subview-tab ${contentView === "overview" ? "active" : ""}`}
+					onClick={() => setTabData((prev) => ({ ...prev, contentView: "overview" }))}
+				>
+					Overview
+				</button>
+				<button
+					type="button"
+					className={`subview-tab ${contentView === "tradeDetail" ? "active" : ""}`}
+					onClick={() => setTabData((prev) => ({ ...prev, contentView: "tradeDetail" }))}
+				>
+					Trade detail
+				</button>
+			</div>
+
 			<div className="tab-panel-header">
 				<div>
-					<h2 className="tab-panel-title">{symbol} Overview</h2>
-					<p className="tab-panel-subtitle">Analyze resistance signals with configurable window size.</p>
-					{dataRange?.start_date && dataRange?.end_date && (
+					<h2 className="tab-panel-title">
+						{symbol} {contentView === "tradeDetail" ? "Trade detail" : "Overview"}
+					</h2>
+					<p className="tab-panel-subtitle">
+						{contentView === "tradeDetail"
+							? "Backtest visualization for one window: buy/sell markers and equity curve."
+							: "Analyze resistance signals with configurable window size."}
+					</p>
+					{contentView === "overview" && dataRange?.start_date && dataRange?.end_date && (
 						<div className="data-range-text">
 							Data range: {dataRange.start_date} to {dataRange.end_date} ({dataRange.rows} rows)
 						</div>
 					)}
 				</div>
-				<div className="controls">
+				{contentView === "overview" && (
+					<div className="controls">
 						<input
 							type="number"
 							min="1"
@@ -232,9 +339,179 @@ export function TabContent({ symbol, theme, windowSize, setWindowSize, tabData, 
 						<button className="primary-btn" onClick={fetchChart} disabled={loading}>
 							{loading ? "Generating..." : "Generate"}
 						</button>
-				</div>
+					</div>
+				)}
 			</div>
 
+			{contentView === "tradeDetail" && (
+				<div className="trade-detail-controls">
+					<div className="scenario-input-grid trade-detail-input-grid">
+						<label className="field-label">
+							<span>Window</span>
+							<input
+								type="number"
+								min="2"
+								placeholder="e.g. 20"
+								value={tradeDetail.window}
+								onChange={(e) => updateTradeDetail({ window: e.target.value })}
+							/>
+						</label>
+						<label className="field-label">
+							<span>Sell days (hold)</span>
+							<input
+								type="number"
+								min="1"
+								placeholder="e.g. 30"
+								value={tradeDetail.holdDays}
+								onChange={(e) => updateTradeDetail({ holdDays: e.target.value })}
+							/>
+						</label>
+						<label className="field-label">
+							<span>Stop-loss %</span>
+							<input
+								type="number"
+								min="0"
+								step="0.1"
+								placeholder="e.g. 2"
+								value={tradeDetail.stopLossPct}
+								onChange={(e) => updateTradeDetail({ stopLossPct: e.target.value })}
+							/>
+						</label>
+						<label className="field-label">
+							<span>Fee / slippage %</span>
+							<input
+								type="number"
+								min="0"
+								step="0.1"
+								placeholder="e.g. 0.2"
+								value={tradeDetail.transactionCostPct}
+								onChange={(e) => updateTradeDetail({ transactionCostPct: e.target.value })}
+							/>
+						</label>
+					</div>
+					<div className="trade-detail-run-row">
+						<button
+							type="button"
+							className="primary-btn"
+							onClick={fetchTradeDetailViz}
+							disabled={tradeDetail.loading}
+						>
+							{tradeDetail.loading ? "Loading..." : "Load visualization"}
+						</button>
+						{tradeDetail.error && (
+							<span className="trade-detail-error">{tradeDetail.error}</span>
+						)}
+					</div>
+					{td?.data_range && (
+						<div className="data-range-text">
+							Data range: {td.data_range.start_date} to {td.data_range.end_date} ({td.data_range.rows}{" "}
+							rows) · window {td?.window}
+						</div>
+					)}
+				</div>
+			)}
+
+			{contentView === "tradeDetail" && (
+				<div className="trade-detail-section">
+					{tdMetrics && (
+						<div className="trade-detail-metrics">
+							<div className="metric-chip metric-chip-high">
+								<span>Total return %</span>
+								<strong>{tdMetrics.total_return_pct}</strong>
+							</div>
+							<div className="metric-chip metric-chip-low">
+								<span>Max drawdown %</span>
+								<strong>{tdMetrics.max_drawdown_pct}</strong>
+							</div>
+							<div className="metric-chip metric-chip-high">
+								<span>Win rate %</span>
+								<strong>{tdMetrics.win_rate_pct}</strong>
+							</div>
+							<div className="metric-chip metric-chip-low">
+								<span>Trades</span>
+								<strong>{tdMetrics.total_trades}</strong>
+							</div>
+						</div>
+					)}
+
+					<div className="chart-card trade-detail-chart-card">
+						<div className="chart-card-inner">
+							<h4 className="trade-detail-chart-title">Price &amp; trades</h4>
+							{tdPrices.length > 0 ? (
+								<TradingChart
+									prices={tdPrices}
+									markers={{
+										buy_dates: tdBuyDates,
+										sell_dates: tdSellDates,
+										high_dates: [],
+										low_dates: [],
+									}}
+									focusDate={null}
+									theme={theme}
+									markerVariant="trades"
+								/>
+							) : (
+								<div className="empty-state">
+									{tradeDetail.loading
+										? "Loading..."
+										: "Set parameters and click Load visualization."}
+								</div>
+							)}
+						</div>
+					</div>
+
+					<div className="chart-card trade-detail-chart-card">
+						<div className="chart-card-inner">
+							<h4 className="trade-detail-chart-title">Equity curve (compounded)</h4>
+							{tdEquity.length > 0 ? (
+								<EquityCurveChart equityPoints={tdEquity} theme={theme} />
+							) : (
+								<div className="empty-state">
+									{tradeDetail.loading
+										? "Loading..."
+										: "No equity data yet."}
+								</div>
+							)}
+						</div>
+					</div>
+
+					{td?.trades?.length > 0 && (
+						<div className="trade-detail-table-wrap">
+							<h4 className="trade-detail-chart-title">All trades</h4>
+							<div className="results-table-wrap trade-detail-table-inner">
+								<table className="results-table">
+									<thead>
+										<tr>
+											<th>#</th>
+											<th>Buy date</th>
+											<th>Sell date</th>
+											<th>Buy px</th>
+											<th>Sell px</th>
+											<th>Net %</th>
+											<th>Exit</th>
+										</tr>
+									</thead>
+									<tbody>
+										{td.trades.map((t, i) => (
+											<tr key={`${t.buy_date}-${t.sell_date}-${i}`}>
+												<td>{i + 1}</td>
+												<td>{t.buy_date}</td>
+												<td>{t.sell_date}</td>
+												<td>{t.buy_price}</td>
+												<td>{t.sell_price}</td>
+												<td>{t.net_return_pct}</td>
+												<td>{t.exit}</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</div>
+						</div>
+					)}
+				</div>
+			)}
+
+			{contentView === "overview" && (
 			<div className="panel-layout">
 				<div className="chart-card">
 					<div className="chart-card-inner">
@@ -304,7 +581,9 @@ export function TabContent({ symbol, theme, windowSize, setWindowSize, tabData, 
 					</div>
 				</div>
 			</div>
+			)}
 
+			{contentView === "overview" && (
 			<div className="backtest-section">
 				<div className="backtest-header">
 					<div>
@@ -478,6 +757,7 @@ export function TabContent({ symbol, theme, windowSize, setWindowSize, tabData, 
 					</button>
 				</div>
 			</div>
+			)}
 		</div>
 	);
 }
