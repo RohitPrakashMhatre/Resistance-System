@@ -3,7 +3,11 @@ import pandas as pd
 import numpy as np
 from pydantic import BaseModel
 
-from app.backtesting.engine import get_latest_available_data_date, run_backtest_for_symbol
+from app.backtesting.engine import (
+    build_trade_detail_from_dataframe,
+    get_latest_available_data_date,
+    run_backtest_for_symbol,
+)
 from app.backtesting.storage import (
     delete_backtest_result,
     get_backtest_result,
@@ -42,6 +46,7 @@ class BacktestDeleteRequest(BaseModel):
 @plot_router.get("/signals")
 async def get_signals(symbol: str, window: int):
     try:
+        symbol = symbol.replace(".",":")
         df = await get_signal_data(symbol, window)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -58,15 +63,15 @@ async def get_signals(symbol: str, window: int):
     if "low_date" not in df.columns:
         df["low_date"] = pd.NaT
 
-    # logger.info(f"DF: \n{df.head()}")
-    logger.info(f"High signal DataFrame: \n{
-        df[df["high_signal"] == True][["date", "high", "low", "close", "high_signal", "high_day", "high_date"]]
-        }"
-    )
-    logger.info(f"Low signal DataFrame: \n{
-        df[df["low_signal"] == True][["date", "high", "low", "close", "low_signal", "low_day", "low_date"]]
-        }"
-    )
+    # logger.info("DF: \n%s", df.head())
+    high_df = df[df["high_signal"] == True][
+        ["date", "high", "low", "close", "high_signal", "high_day", "high_date"]
+    ]
+    low_df = df[df["low_signal"] == True][
+        ["date", "high", "low", "close", "low_signal", "low_day", "low_date"]
+    ]
+    logger.info("High signal DataFrame: \n%s", high_df)
+    logger.info("Low signal DataFrame: \n%s", low_df)
     # logger.info(f"Dtypes: \n{df.dtypes}")
     if df.empty:
         raise HTTPException(status_code=500, detail="No Data Found")
@@ -252,6 +257,72 @@ async def get_backtest_scenarios(symbol: str, limit: int = 20):
         )
 
     return {"symbol": symbol, "scenarios": enriched}
+
+
+@plot_router.get("/backtest/trade-detail")
+async def get_backtest_trade_detail(
+    symbol: str,
+    window: int,
+    hold_days: int = 30,
+    transaction_cost_pct: float = 0.2,
+    stop_loss_pct: float = 0.0,
+):
+    """
+    Single-window backtest with full trade list, equity curve points, and OHLC for charting.
+    """
+    symbol = (symbol or "").strip()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="symbol is required")
+    if window < 2:
+        raise HTTPException(status_code=400, detail="window must be >= 2")
+
+    try:
+        df = await get_signal_data(symbol, window)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if "high_date" not in df.columns and "high_future_date" in df.columns:
+        df["high_date"] = df["high_future_date"]
+    if "low_date" not in df.columns and "low_future_date" in df.columns:
+        df["low_date"] = df["low_future_date"]
+    if "high_date" not in df.columns:
+        df["high_date"] = pd.NaT
+    if "low_date" not in df.columns:
+        df["low_date"] = pd.NaT
+
+    df = df.replace([np.inf, -np.inf], pd.NA)
+    df["high_date"] = pd.to_datetime(df["high_date"], errors="coerce")
+    df["low_date"] = pd.to_datetime(df["low_date"], errors="coerce")
+
+    prices = (
+        df[["date", "open", "high", "low", "close"]]
+        .assign(date=lambda x: x["date"].dt.strftime("%Y-%m-%d"))
+        .where(pd.notna, None)
+        .to_dict(orient="records")
+    )
+    data_start_date = prices[0]["date"] if prices else None
+    data_end_date = prices[-1]["date"] if prices else None
+
+    detail = build_trade_detail_from_dataframe(
+        df,
+        symbol=symbol,
+        window=window,
+        hold_days=hold_days,
+        transaction_cost_pct=transaction_cost_pct,
+        stop_loss_pct=stop_loss_pct,
+    )
+    if detail is None:
+        raise HTTPException(status_code=500, detail="No data for trade detail")
+
+    return {
+        **detail,
+        "prices": prices,
+        "data_range": {
+            "start_date": data_start_date,
+            "end_date": data_end_date,
+            "rows": len(prices),
+        },
+    }
 
 
 @plot_router.delete("/backtest")
